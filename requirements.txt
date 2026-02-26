@@ -1,0 +1,21 @@
+# Core LangChain
+langchain>=0.2.0
+langchain-openai>=0.1.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+langchain-groq>=0.1.0
+
+# Embeddings
+sentence-transformers>=2.7.0
+torch>=2.6.0
+# Vector DB
+faiss-cpu>=1.8.0
+
+# API
+# Use the [standard] extra so the `fastapi` CLI works (e.g. `fastapi dev/run`).
+fastapi[standard]>=0.111.0
+uvicorn[standard]>=0.30.0
+
+# Utils
+pydantic>=2.0.0
+python-dotenv>=1.0.0
