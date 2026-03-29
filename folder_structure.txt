@@ -1,0 +1,35 @@
+medassist/
+│
+├── data/
+│   ├── raw/
+│   │   └── medassist_final_35.json         ← WHO scraped data (done ✅)
+│   ├── metadata/
+│   │   └── medassist_metadata.json         ← Pydantic validated metadata
+│   └── embeddings/
+│       └── chroma_db/                      ← ChromaDB persistent storage
+│
+├── backend/
+│   ├── main.py                             ← FastAPI entry point
+│   ├── config.py                           ← API keys, DB URL, settings
+│   ├── database.py                         ← PostgreSQL connection, SQLAlchemy
+│   │
+│   ├── models/
+│   │   ├── db_models.py                    ← SQLAlchemy table definitions
+│   │   └── pydantic_schema.py              ← Disease Pydantic schema
+│   │
+│   ├── routers/
+│   │   └── chat.py                         ← Chatbot endpoints only
+│   │
+│   ├── services/
+│   │   ├── summarizer.py                   ← Stage 3
+│   │   ├── semantic_search.py              ← Stage 4
+│   │   └── followup_engine.py              ← Stage 5
+│   │
+│   └── requirements.txt
+│
+├── scripts/
+│   ├── generate_metadata.py                ← Run once on Colab — Phase 1
+│   ├── generate_embeddings.py              ← Run once on Colab — Phase 2
+│   └── seed_db.py                          ← Run once — load metadata to Postgres
+│
+└── docker-compose.yml

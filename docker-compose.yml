@@ -1,0 +1,47 @@
+version: '3.8'
+
+# To deploy:
+# 1. Run generate_metadata.py and generate_embeddings.py locally to create data/metadata and data/embeddings
+# 2. Run docker-compose up --build
+# 3. After postgres is up, run seed_db.py with DB_HOST=db (e.g., DB_HOST=db python scripts/seed_db.py)
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY_1=${GROQ_API_KEY_1}
+      - GROQ_API_KEY_2=${GROQ_API_KEY_2}
+      - GROQ_API_KEY_3=${GROQ_API_KEY_3}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=medassist
+      - DB_USER=postgres
+      - DB_PASSWORD=${DB_PASSWORD}
+      - APP_ENV=production
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - db
+    networks:
+      - medassist_network
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=medassist
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - medassist_network
+
+volumes:
+  postgres_data:
+
+networks:
+  medassist_network:
