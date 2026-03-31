@@ -11,7 +11,7 @@ Given a conversation between a patient and a medical chatbot, extract a structur
 Return ONLY a valid JSON object — no explanation, no markdown, no backticks.
 """
 
-def build_summary_prompt(conversation: list[dict]) -> str:
+def build_summary_prompt(conversation: list[dict], user_profile: dict | None = None) -> str:
     convo_text = "\n".join([
         f"{msg['role'].upper()}: {msg['content']}"
         for msg in conversation
@@ -32,9 +32,14 @@ def build_summary_prompt(conversation: list[dict]) -> str:
         "additional_context": "any other clinically relevant details mentioned"
     }
 
+    profile_block = json.dumps(user_profile or {}, indent=2)
+
     return f"""Here is the patient-chatbot conversation:
 
 {convo_text}
+
+Trusted user profile from system records (prefer this over uncertain extraction):
+{profile_block}
 
 Extract a structured clinical profile from this conversation.
 Fill this exact JSON schema:
@@ -46,15 +51,16 @@ Rules:
 3. If information is not mentioned set it to null
 4. body_regions_affected must be a list of body parts mentioned or implied
 5. severity_impression must be exactly: mild / moderate / severe
+6. If age/sex/weight are present in trusted user profile, use those values in patient_profile
 """
 
-def generate_user_summary(conversation: list[dict]) -> dict:
+def generate_user_summary(conversation: list[dict], user_profile: dict | None = None) -> dict:
     try:
         # ── only change: client.chat.completions.create → groq.chat ──
         raw = groq.chat(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": build_summary_prompt(conversation)}
+                {"role": "user",   "content": build_summary_prompt(conversation, user_profile=user_profile)}
             ],
             temperature = 0.1,
             max_tokens  = 1500,

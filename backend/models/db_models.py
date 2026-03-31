@@ -17,6 +17,19 @@ class DiseaseMetadata(Base):
     created_at  = Column(DateTime, default=datetime.utcnow)
 
 
+class UserProfile(Base):
+    """One row per user for persistent demographic profile."""
+    __tablename__ = "user_profiles"
+
+    user_id    = Column(String, primary_key=True)
+    name       = Column(String, nullable=True)
+    age        = Column(Integer, nullable=True)
+    sex        = Column(String, nullable=True)
+    weight     = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ChatSession(Base):
     """One row per user conversation."""
     __tablename__ = "chat_sessions"

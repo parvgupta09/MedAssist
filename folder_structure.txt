@@ -10,20 +10,22 @@ medassist/
 │
 ├── backend/
 │   ├── main.py                             ← FastAPI entry point
+│   ├── auth.py                             ← Auth bridge (JWT/header → current user)
 │   ├── config.py                           ← API keys, DB URL, settings
 │   ├── database.py                         ← PostgreSQL connection, SQLAlchemy
 │   │
 │   ├── models/
-│   │   ├── db_models.py                    ← SQLAlchemy table definitions
+│   │   ├── db_models.py                    ← SQLAlchemy tables (sessions/messages/user profile)
 │   │   └── pydantic_schema.py              ← Disease Pydantic schema
 │   │
 │   ├── routers/
-│   │   └── chat.py                         ← Chatbot endpoints only
+│   │   └── chat.py                         ← Chatbot endpoints, history, report JSON/PDF
 │   │
 │   ├── services/
 │   │   ├── summarizer.py                   ← Stage 3
 │   │   ├── semantic_search.py              ← Stage 4
 │   │   └── followup_engine.py              ← Stage 5
+│   │   └── groq_client.py                  ← Rotating Groq client wrapper
 │   │
 │   └── requirements.txt
 │
