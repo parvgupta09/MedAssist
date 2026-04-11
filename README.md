@@ -1,12 +1,3 @@
----
-title: MedAssist
-emoji: 🏥
-colorFrom: blue
-colorTo: green
-sdk: docker
-app_port: 7860
-pinned: false
----
 # MedAssist 🤖 - AI-Powered Medical Symptom Checker
 
 [![Deploy on Hugging Face](https://img.shields.io/badge/Deploy-Hugging%20Face-orange)](https://huggingface.co/spaces)
