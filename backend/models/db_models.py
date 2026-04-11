@@ -58,3 +58,7 @@ class ChatMessage(Base):
     timestamp    = Column(DateTime, default=datetime.utcnow)
 
     session = relationship("ChatSession", back_populates="messages")
+
+# File Summary:
+# Defines SQLAlchemy tables for disease metadata, user profiles, sessions, and messages.
+# Captures persistent chat workflow state from session start to final diagnosis.

@@ -370,3 +370,7 @@ def process_followup_answer(
         "purpose":  next_q.get("purpose", ""),
         "top5":     updated_top5
     }
+
+# File Summary:
+# Drives Stage 5 follow-up logic: question selection, reranking, and early exit.
+# Builds final diagnosis payload from ranked diseases plus metadata evidence.

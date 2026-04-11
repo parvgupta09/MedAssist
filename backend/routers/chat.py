@@ -5,20 +5,26 @@ import textwrap
 import importlib
 from io import BytesIO
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from backend.auth import CurrentUser, get_current_user
 from backend.database import get_db
 from backend.models.db_models import ChatSession, ChatMessage, UserProfile
 from backend.services.summarizer import generate_user_summary
 from backend.services.semantic_search import search_diseases
 from backend.services.followup_engine import process_followup_answer, generate_next_stage2_question
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(tags=["chat"])
+
+
+def _require_user_id(x_user_id: str | None = Header(default=None)) -> str:
+    """Trust user identity forwarded by upstream backend after verification."""
+    if not x_user_id or not x_user_id.strip():
+        raise HTTPException(status_code=401, detail="Unauthorized: missing x-user-id header")
+    return x_user_id.strip()
 
 # ─── REQUEST / RESPONSE MODELS ────────────────────────────
 class StartSessionRequest(BaseModel):
@@ -146,11 +152,11 @@ def _get_or_create_user_profile(db: Session, user_id: str, incoming_profile: dic
     }
 
 # ─── STAGE 1 + 2: START SESSION ──────────────────────────
-@router.post("/start", response_model=SessionResponse)
+@router.post("/chat/start", response_model=SessionResponse)
 def start_session(
     req: StartSessionRequest,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    user_id: str = Depends(_require_user_id),
 ):
     """
     Stage 1 — User describes symptoms.
@@ -163,12 +169,12 @@ def start_session(
     
     session_id = str(uuid.uuid4())
     incoming_profile = _extract_profile_from_request(req)
-    user_profile = _get_or_create_user_profile(db, current_user.user_id, incoming_profile)
+    user_profile = _get_or_create_user_profile(db, user_id, incoming_profile)
 
     # Create session
     session = ChatSession(
         id         = session_id,
-        user_id    = current_user.user_id,
+        user_id    = user_id,
         started_at = datetime.utcnow(),
         status     = "active"
     )
@@ -210,11 +216,11 @@ def start_session(
         )
 
 # ─── STAGE 3 + 4 + 5: CONTINUE SESSION ───────────────────
-@router.post("/continue", response_model=SessionResponse)
+@router.post("/chat/continue", response_model=SessionResponse)
 def continue_session(
     req: ContinueSessionRequest,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    user_id: str = Depends(_require_user_id),
 ):
     """
     Handles all messages after the first one.
@@ -229,14 +235,14 @@ def continue_session(
     session = db.query(ChatSession).filter_by(id=req.session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.user_id != current_user.user_id:
+    if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden: session does not belong to current user")
     if session.status == "completed":
         raise HTTPException(status_code=400, detail="Session already completed")
 
     # Get full conversation
     conversation = get_conversation(db, req.session_id)
-    profile_row = db.query(UserProfile).filter_by(user_id=current_user.user_id).first()
+    profile_row = db.query(UserProfile).filter_by(user_id=user_id).first()
     user_profile = {
         "name": profile_row.name if profile_row else None,
         "age": profile_row.age if profile_row else None,
@@ -420,17 +426,17 @@ def continue_session(
         )
 
 # ─── GET CHAT HISTORY ─────────────────────────────────────
-@router.get("/history/{session_id}")
+@router.get("/chat/history/{session_id}")
 def get_history(
     session_id: str,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    user_id: str = Depends(_require_user_id),
 ):
     """Returns full conversation history for a session."""
     session = db.query(ChatSession).filter_by(id=session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.user_id != current_user.user_id:
+    if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden: session does not belong to current user")
 
     messages = (
@@ -457,57 +463,28 @@ def get_history(
         ]
     }
 
-@router.get("/sessions/me")
-def get_my_sessions(
+@router.delete("/chat/delete/{session_id}")
+def delete_session(
+    session_id: str,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    user_id: str = Depends(_require_user_id),
 ):
-    """Returns sessions for the currently authenticated user."""
-    sessions = (
-        db.query(ChatSession)
-        .filter(ChatSession.user_id == current_user.user_id)
-        .order_by(ChatSession.started_at.desc())
-        .all()
-    )
-    return [
-        {
-            "session_id":       s.id,
-            "status":           s.status,
-            "started_at":       s.started_at,
-            "ended_at":         s.ended_at,
-            "final_diagnosis":  s.final_diagnosis,
-        }
-        for s in sessions
-    ]
+    """Delete a session and all related messages for the current user."""
+    session = db.query(ChatSession).filter_by(id=session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: session does not belong to current user")
 
+    db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete(synchronize_session=False)
+    db.delete(session)
+    db.commit()
 
-# ─── GET ALL USER SESSIONS ────────────────────────────────
-@router.get("/sessions/{user_id}")
-def get_user_sessions(
-    user_id: str,
-    db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
-):
-    """Returns all sessions for a user — for history page."""
-    if user_id != current_user.user_id:
-        raise HTTPException(status_code=403, detail="Forbidden: cannot access another user's sessions")
-
-    sessions = (
-        db.query(ChatSession)
-        .filter(ChatSession.user_id == user_id)
-        .order_by(ChatSession.started_at.desc())
-        .all()
-    )
-    return [
-        {
-            "session_id":       s.id,
-            "status":           s.status,
-            "started_at":       s.started_at,
-            "ended_at":         s.ended_at,
-            "final_diagnosis":  s.final_diagnosis,
-        }
-        for s in sessions
-    ]
+    return {
+        "success": True,
+        "message": "Session deleted",
+        "session_id": session_id,
+    }
 
 # ─── HELPERS ──────────────────────────────────────────────
 def _detect_stage(session: ChatSession) -> str:
@@ -584,7 +561,7 @@ def _build_report_payload(session: ChatSession, user_profile: dict) -> dict:
 
 
 def _render_pdf_report(report_data: dict) -> bytes:
-    """Render a single-page PDF report for patient-friendly sharing."""
+    """Render a professional medical report PDF without doctor details."""
     try:
         pagesizes = importlib.import_module("reportlab.lib.pagesizes")
         canvas_module = importlib.import_module("reportlab.pdfgen.canvas")
@@ -596,62 +573,123 @@ def _render_pdf_report(report_data: dict) -> bytes:
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+    
+    y = height - 30
 
-    y = height - 40
-
-    def write_line(text: str, size: int = 11, indent: int = 0, gap: int = 16):
+    def section_divider():
         nonlocal y
-        pdf.setFont("Helvetica", size)
+        y -= 6
+        pdf.setLineWidth(1.5)
+        pdf.line(40, y, 570, y)
+        y -= 8
+
+    def section_header(text: str):
+        nonlocal y
+        y -= 4
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.drawString(40, y, text)
+        y -= 14
+        pdf.setLineWidth(0.5)
+        pdf.line(40, y, 570, y)
+        y -= 8
+
+    def write_line(text: str, size: int = 10, indent: int = 0, gap: int = 12, bold: bool = False):
+        nonlocal y
+        font = "Helvetica-Bold" if bold else "Helvetica"
+        pdf.setFont(font, size)
         wrapped = textwrap.wrap(text, width=95)
         for line in wrapped:
             pdf.drawString(40 + indent, y, line)
             y -= gap
 
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(40, y, "MedAssist - Patient Summary Report")
-    y -= 24
+    # Header
+    pdf.setFont("Helvetica-Bold", 22)
+    pdf.drawString(40, y, "MEDASSIST")
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(40, y - 14, "AI-Assisted Health Assessment Report")
+    y -= 32
 
+    section_divider()
+
+    # Patient Information
     patient = report_data.get("patient", {})
     top = report_data.get("top_diagnosis", {})
     reasons = report_data.get("probable_reasons", [])
     others = report_data.get("other_possible_conditions", [])
 
-    write_line(
-        f"Patient: {patient.get('name') or 'N/A'} | Age: {patient.get('age') or 'N/A'} | "
-        f"Sex: {patient.get('sex') or 'N/A'} | Weight: {patient.get('weight') or 'N/A'}"
-    )
-    write_line(f"Session ID: {report_data.get('session_id')}")
-    y -= 4
+    section_header("PATIENT INFORMATION")
+    write_line(f"Name: {patient.get('name') or 'N/A'}", bold=True, size=11)
+    write_line(f"Age: {patient.get('age') or 'N/A'} years")
+    write_line(f"Gender: {patient.get('sex') or 'N/A'}")
+    write_line(f"Weight: {patient.get('weight') or 'N/A'} kg")
+    y -= 2
 
-    pdf.setFont("Helvetica-Bold", 13)
-    pdf.drawString(40, y, "Top Likely Condition")
-    y -= 18
-    write_line(f"Condition: {top.get('name') or 'N/A'}")
+    section_divider()
+
+    # Assessment Summary
+    section_header("CLINICAL ASSESSMENT")
+    write_line(f"Report Status: Assessment Complete")
+    write_line(f"Assessment Type: AI-Based Symptom Analysis")
+    y -= 2
+
+    section_divider()
+
+    # Primary Diagnosis
+    section_header("PRIMARY DIAGNOSIS")
+    write_line(f"{top.get('name') or 'N/A'}", size=12, bold=True)
     confidence = top.get("confidence")
-    confidence_text = "N/A" if confidence is None else f"{round(float(confidence) * 100)}%"
-    write_line(f"Confidence: {confidence_text}")
-    write_line(f"Typical Duration: {top.get('typical_duration') or 'N/A'}")
-    write_line(f"When to see a doctor: {top.get('when_to_see_doctor') or 'N/A'}")
-    y -= 4
+    confidence_pct = "N/A" if confidence is None else f"{round(float(confidence) * 100)}%"
+    write_line(f"Confidence Level: {confidence_pct}", size=10)
+    write_line(f"Typical Duration: {top.get('typical_duration') or 'N/A'}", size=10)
+    y -= 2
 
-    pdf.setFont("Helvetica-Bold", 13)
-    pdf.drawString(40, y, "Why This Is Probable")
-    y -= 18
-    for reason in reasons[:4]:
-        write_line(f"- {reason}", indent=6)
+    # Overview
+    section_header("OVERVIEW & FINDINGS")
+    write_line(f"{top.get('overview') or 'No additional information available.'}", size=10, gap=11)
+    y -= 2
 
-    if others:
-        y -= 4
-        pdf.setFont("Helvetica-Bold", 13)
-        pdf.drawString(40, y, "Other Possible Conditions")
-        y -= 18
-        write_line(", ".join([str(name) for name in others if name]))
+    # Reasoning
+    if reasons:
+        section_header("REASONING & KEY INDICATORS")
+        for i, reason in enumerate(reasons[:4], 1):
+            write_line(f"{i}. {reason}", indent=8, size=9, gap=10)
+        y -= 2
 
+    # Recommendations
+    section_header("PROGNOSIS & RECOMMENDATIONS")
+    write_line("When to Seek Medical Attention:", bold=True, size=10)
+    write_line(f"{top.get('when_to_see_doctor') or 'Consult a healthcare provider if symptoms persist or worsen.'}", indent=8, size=9, gap=10)
+    y -= 2
+    write_line("General Care Recommendations:", bold=True, size=10)
+    write_line("• Rest and follow medical advice if symptoms persist", indent=8, size=9, gap=10)
+    write_line("• Monitor symptoms closely in the coming days", indent=8, size=9, gap=10)
+    write_line("• Stay hydrated and maintain proper nutrition", indent=8, size=9, gap=10)
+    y -= 2
+
+    # Other Possible Conditions
+    if others and len(others) > 0:
+        section_header("OTHER POSSIBLE CONDITIONS")
+        other_list = [str(name) for name in others if name]
+        for i, condition in enumerate(other_list[:3], 1):
+            write_line(f"{i}. {condition}", indent=8, size=9, gap=10)
+        y -= 2
+
+    section_divider()
+
+    # Disclaimer
+    section_header("IMPORTANT DISCLAIMER")
+    disclaimer_text = (
+        "This report is generated by artificial intelligence and is provided for informational purposes only. "
+        "It is NOT a substitute for professional medical advice, diagnosis, or treatment. "
+        "Always consult with a qualified healthcare provider before making any medical decisions."
+    )
+    write_line(disclaimer_text, size=8, gap=10)
+
+    # Footer
     y -= 8
-    pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawString(40, y, "Important Disclaimer")
-    y -= 18
-    write_line(str(report_data.get("disclaimer", "Consult a licensed doctor for confirmation.")), size=10, gap=14)
+    pdf.setFont("Helvetica", 7)
+    pdf.drawString(40, y, "MedAssist v1.0 | AI-Assisted Health Assessment")
+    pdf.drawRightString(570, y, f"Generated: {datetime.utcnow().strftime('%d-%m-%Y %H:%M UTC')}")
 
     pdf.showPage()
     pdf.save()
@@ -696,22 +734,22 @@ def _complete_session(
     )
 
 
-@router.get("/report/{session_id}")
+@router.get("/chat/report/{session_id}")
 def get_report_data(
     session_id: str,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    user_id: str = Depends(_require_user_id),
 ):
     """Return structured report data for a completed session."""
     session = db.query(ChatSession).filter_by(id=session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.user_id != current_user.user_id:
+    if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden: session does not belong to current user")
     if session.status != "completed":
         raise HTTPException(status_code=400, detail="Report available only for completed sessions")
 
-    profile_row = db.query(UserProfile).filter_by(user_id=current_user.user_id).first()
+    profile_row = db.query(UserProfile).filter_by(user_id=user_id).first()
     user_profile = {
         "name": profile_row.name if profile_row else None,
         "age": profile_row.age if profile_row else None,
@@ -721,22 +759,22 @@ def get_report_data(
     return _build_report_payload(session, user_profile)
 
 
-@router.get("/report/{session_id}/pdf")
+@router.get("/chat/report/{session_id}/pdf")
 def download_report_pdf(
     session_id: str,
     db: Session = Depends(get_db),
-    current_user: CurrentUser = Depends(get_current_user),
+    user_id: str = Depends(_require_user_id),
 ):
     """Generate and return a one-page PDF report for a completed session."""
     session = db.query(ChatSession).filter_by(id=session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    if session.user_id != current_user.user_id:
+    if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden: session does not belong to current user")
     if session.status != "completed":
         raise HTTPException(status_code=400, detail="Report available only for completed sessions")
 
-    profile_row = db.query(UserProfile).filter_by(user_id=current_user.user_id).first()
+    profile_row = db.query(UserProfile).filter_by(user_id=user_id).first()
     user_profile = {
         "name": profile_row.name if profile_row else None,
         "age": profile_row.age if profile_row else None,
@@ -753,3 +791,7 @@ def download_report_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename={file_name}"},
     )
+
+# File Summary:
+# Implements chat API endpoints for session lifecycle, diagnosis flow, and reports.
+# Coordinates stage handling, persistence, authorization checks, and PDF export.

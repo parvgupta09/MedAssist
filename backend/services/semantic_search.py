@@ -202,3 +202,7 @@ def search_diseases(summary: dict) -> list[dict]:
     filtered   = rule_filter(candidates, summary)
     top5       = llm_rerank(filtered, summary)
     return top5
+
+# File Summary:
+# Performs disease retrieval pipeline: query build, vector search, rule filter, LLM rerank.
+# Combines Chroma embeddings, metadata constraints, and Groq-based ranking.

@@ -65,3 +65,7 @@ def normalize_disease_name(name: str) -> str:
     # Remove extra spaces again after punctuation removal
     normalized = re.sub(r'\s+', ' ', normalized).strip()
     return normalized
+
+# File Summary:
+# Central configuration for paths, API keys, database URL, and model settings.
+# Includes disease-name normalization used by search and follow-up services.

@@ -115,3 +115,7 @@ class DiseaseSchema(BaseModel):
     prevention: List[PreventionMethod]
     question_flow: QuestionFlow
     differential_diagnosis: List[str]
+
+# File Summary:
+# Defines nested Pydantic schemas for disease metadata structure and validation.
+# Standardizes symptoms, diagnosis clues, prognosis, prevention, and question flows.

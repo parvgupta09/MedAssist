@@ -110,3 +110,7 @@ def generate_user_summary(conversation: list[dict], user_profile: dict | None = 
             "severity_impression": "moderate",
             "additional_context": None
         }
+
+# File Summary:
+# Generates structured clinical summaries from conversation history via Groq.
+# Validates and normalizes summary fields before downstream diagnosis stages.

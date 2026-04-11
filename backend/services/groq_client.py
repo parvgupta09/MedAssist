@@ -5,7 +5,7 @@ class RotatingGroqClient:
     def __init__(self, api_keys: list[str]):
         self.api_keys      = api_keys
         self.current_index = 0
-        self.client        = Groq(api_key=self.api_keys[0])
+        self.client        = Groq(api_key=self.api_keys[0], http_client=None)
         self.retry_count   = 0
         self.max_retries   = len(api_keys)  # Max retries = number of keys
         print(f"[Groq] Initialized with {len(api_keys)} API key(s)")
@@ -14,7 +14,7 @@ class RotatingGroqClient:
         self.current_index += 1
         if self.current_index >= len(self.api_keys):
             raise Exception("❌ All Groq API keys exhausted. Please check your API key configuration and try again later.")
-        self.client = Groq(api_key=self.api_keys[self.current_index])
+        self.client = Groq(api_key=self.api_keys[self.current_index], http_client=None)
         print(f"[Groq] Rotated to API key {self.current_index + 1}/{len(self.api_keys)}")
 
     def chat(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 1500, attempt: int = 0) -> str:
@@ -66,3 +66,7 @@ class RotatingGroqClient:
 
 # Single shared instance used by all services
 groq = RotatingGroqClient(api_keys=GROQ_API_KEYS)
+
+# File Summary:
+# Wraps Groq chat completions with API-key rotation and resilient error handling.
+# Exposes one shared groq client instance for all backend services.

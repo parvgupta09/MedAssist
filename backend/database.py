@@ -21,3 +21,7 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# File Summary:
+# Initializes SQLAlchemy engine/session/base using DATABASE_URL.
+# Provides get_db dependency for request-scoped database sessions.

@@ -105,3 +105,7 @@ def health_ready():
 def health():
     # Keep legacy endpoint for compatibility with existing clients.
     return {"status": "healthy"}
+
+# File Summary:
+# FastAPI application entrypoint with startup setup, CORS, and health endpoints.
+# Registers chat router and readiness checks for database plus embeddings.
