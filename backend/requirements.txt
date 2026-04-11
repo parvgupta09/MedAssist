@@ -4,7 +4,8 @@ sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 pydantic==2.7.1
 groq==0.9.0
-# httpx==0.24.1  # Comment: Commented for deployment - let dependencies resolve automatically
+httpx==0.24.1
+httpcore==0.17.3
 chromadb==0.4.24
 numpy<2.0
 sentence-transformers==3.0.0
