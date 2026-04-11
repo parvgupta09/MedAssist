@@ -23,6 +23,15 @@ try:
     print("[SemanticSearch] ChromaDB collection 'diseases' loaded successfully")
 except Exception as e:
     print(f"[ERROR] ChromaDB collection 'diseases' not found: {e}")
+    try:
+        collections = chroma_client.list_collections()
+        collection_names = [getattr(c, "name", c) for c in collections]
+        print(f"[SemanticSearch] Available collections at {CHROMA_PATH}: {collection_names}")
+        if len(collections) == 1:
+            collection = chroma_client.get_collection(collection_names[0])
+            print(f"[SemanticSearch] Fallback to only available collection: {collection_names[0]}")
+    except Exception as list_err:
+        print(f"[ERROR] Unable to list collections: {list_err}")
     print("[ERROR] Please run generate_embeddings.py to create embeddings")
 
 # Load full metadata with error handling
@@ -69,6 +78,9 @@ def vector_search(query_text: str, top_k: int = 10) -> list[str]:
         # Validate input
         if not query_text or not isinstance(query_text, str):
             print("[WARNING] vector_search called with empty/invalid query_text")
+            return []
+        if collection is None:
+            print("[ERROR] vector_search aborted: no Chroma collection available")
             return []
         
         embedding = embedding_model.encode(query_text).tolist()

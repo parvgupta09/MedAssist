@@ -8,7 +8,34 @@ load_dotenv()
 # ─── BASE PATHS ───────────────────────────────────────────
 BASE_DIR        = Path(__file__).resolve().parent.parent
 METADATA_PATH   = BASE_DIR / "data" / "metadata" / "medassist_metadata.json"
-CHROMA_PATH     = str(BASE_DIR / "data" / "embeddings" / "chroma_db")
+
+
+def _resolve_chroma_path() -> str:
+    """Resolve Chroma path across local and deployed folder layouts."""
+    env_path = os.getenv("CHROMA_PATH")
+    if env_path and Path(env_path).exists():
+        return str(Path(env_path))
+
+    embeddings_root = BASE_DIR / "data" / "embeddings"
+    candidates = [
+        embeddings_root / "chroma_db",
+        embeddings_root / "embeddings" / "chroma_db",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    # Last resort: discover any nested chroma_db directory.
+    for candidate in embeddings_root.rglob("chroma_db") if embeddings_root.exists() else []:
+        if candidate.is_dir():
+            return str(candidate)
+
+    # Keep default path so startup can still proceed and report readiness failure clearly.
+    return str(embeddings_root / "chroma_db")
+
+
+CHROMA_PATH     = _resolve_chroma_path()
 
 # ─── GROQ — only change: single key → list ────────────────
 GROQ_API_KEYS = [
