@@ -1,4 +1,5 @@
 # backend/main.py
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -8,48 +9,67 @@ from backend.config import CHROMA_PATH
 import os
 from pathlib import Path
 import time
-from huggingface_hub import snapshot_download
 from sqlalchemy import text
 
-# Download embeddings from HF Dataset on startup
-try:
+
+def _init_database(max_attempts: int = 15, delay_seconds: int = 1) -> bool:
+    """Create DB tables with retries to survive DB cold start on deploy.
+    Returns True if successful, False otherwise. Does NOT crash startup.
+    """
     last_exc = None
-    for attempt in range(1, 4):
+    for attempt in range(1, max_attempts + 1):
         try:
-            snapshot_download(
-                repo_id="Parv09/medassist-embeddings",
-                repo_type="dataset",
-                local_dir="data/embeddings",
-                token=os.environ.get("HF_TOKEN")
-            )
-            print(f"[INFO] Embeddings snapshot download succeeded on attempt {attempt}")
-            last_exc = None
-            break
+            Base.metadata.create_all(bind=engine)
+            print(f"[INFO] Database initialized on attempt {attempt}")
+            return True
         except Exception as exc:
             last_exc = exc
-            print(f"[WARN] Embeddings download attempt {attempt}/3 failed: {exc}")
-            if attempt < 3:
-                time.sleep(2)
-    if last_exc is not None:
-        raise last_exc
-except Exception as exc:
-    # Do not fail app startup if remote sync is unavailable.
-    print(f"[WARN] Unable to download embeddings from Hugging Face: {exc}")
+            print(f"[WARN] Database init attempt {attempt}/{max_attempts} failed: {str(exc)[:200]}")
+            if attempt < max_attempts:
+                time.sleep(delay_seconds)
+    
+    # Log the failure but don't crash - routes will still be available
+    print(f"[WARN] Database initialization failed after {max_attempts} attempts. "
+          f"API routes will be available but may fail without DB. Last error: {str(last_exc)[:200]}")
+    return False
 
-# Create tables on startup
-Base.metadata.create_all(bind=engine)
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Create tables as startup side-effect; embeddings are expected locally.
+    print("[INFO] Starting application lifespan: initializing database...")
+    success = _init_database()
+    if success:
+        print("[INFO] ✓ Database initialization successful - all routes available")
+    else:
+        print("[WARN] ⚠ Database initialization failed - routes may error on DB operations")
+    print("[INFO] Application startup complete")
+    yield
+    print("[INFO] Application shutdown")
+
+
+def _cors_settings() -> tuple[list[str], bool]:
+    """Build CORS origins from env; keep credentials off for wildcard origins."""
+    raw = os.getenv("ALLOWED_ORIGINS", "*")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    if not origins:
+        origins = ["*"]
+    allow_credentials = origins != ["*"]
+    return origins, allow_credentials
 
 app = FastAPI(
     title       = "MedAssist API",
     description = "AI-powered medical symptom checker",
-    version     = "1.0.0"
+    version     = "1.0.0",
+    lifespan    = lifespan,
 )
 
 # CORS — allow frontend to call the API
+cors_origins, cors_allow_credentials = _cors_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],  # restrict to frontend URL in production
-    allow_credentials = True,
+    allow_origins     = cors_origins,
+    allow_credentials = cors_allow_credentials,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
 )
@@ -60,11 +80,14 @@ app.include_router(chat_router)
 def _check_database() -> tuple[bool, str]:
     """Run a lightweight DB probe for readiness checks."""
     try:
-        with engine.connect() as conn:
+        # Use engine.begin() context for better connection handling
+        with engine.begin() as conn:
             conn.execute(text("SELECT 1"))
         return True, "ok"
     except Exception as exc:
-        return False, str(exc)
+        error_msg = str(exc)[:200]  # Truncate long error messages
+        print(f"[WARN] Database check failed: {error_msg}")
+        return False, error_msg
 
 def _check_embeddings() -> tuple[bool, str]:
     """Check if embeddings directory and Chroma collection are available."""

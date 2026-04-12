@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from urllib.parse import quote_plus
 
 load_dotenv()
 
@@ -37,6 +36,22 @@ def _resolve_chroma_path() -> str:
 
 CHROMA_PATH     = _resolve_chroma_path()
 
+
+def _normalize_database_url(raw_url: str) -> str:
+    """Normalize provider URL for SQLAlchemy and Neon defaults."""
+    url = raw_url.strip()
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+
+    # Neon requires SSL; if missing, enforce it for neon.tech hosts.
+    if "neon.tech" in url and "sslmode=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+
+    return url
+
 # ─── GROQ — only change: single key → list ────────────────
 GROQ_API_KEYS = [
     key.strip() for key in [
@@ -51,15 +66,15 @@ if not GROQ_API_KEYS:
 
 GROQ_MODEL      = "llama-3.3-70b-versatile"
 
-# ─── POSTGRESQL ───────────────────────────────────────────
-DB_HOST         = os.getenv("DB_HOST",     "localhost")
-DB_PORT         = os.getenv("DB_PORT",     "5432")
-DB_NAME         = os.getenv("DB_NAME",     "medassist")
-DB_USER         = os.getenv("DB_USER",     "postgres")
-DB_PASSWORD     = os.getenv("DB_PASSWORD")
+DATABASE_URL_ENV = os.getenv("DATABASE_URL", "").strip()
 
-safe_password   = quote_plus(DB_PASSWORD)
-DATABASE_URL    = f"postgresql://{DB_USER}:{safe_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+if DATABASE_URL_ENV:
+    DATABASE_URL = _normalize_database_url(DATABASE_URL_ENV)
+    print(f"[INFO] Using DATABASE_URL from environment (Neon/external database)")
+else:
+    raise ValueError(
+        "DATABASE_URL is required. Set it in .env for local runs or as a deployment secret."
+    )
 
 # ─── EMBEDDING MODEL ──────────────────────────────────────
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"

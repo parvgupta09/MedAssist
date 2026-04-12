@@ -5,7 +5,7 @@ import textwrap
 import importlib
 from io import BytesIO
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -99,6 +99,54 @@ def get_conversation(db: Session, session_id: str) -> list[dict]:
     return [{"role": m.role, "content": m.message} for m in messages]
 
 
+def _get_history_payload(db: Session, session_id: str) -> list[dict]:
+    """Build full ordered message payload for API responses."""
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.timestamp)
+        .all()
+    )
+    return [
+        {
+            "role": m.role,
+            "message": m.message,
+            "stage": m.stage,
+            "timestamp": m.timestamp,
+        }
+        for m in messages
+    ]
+
+
+def _history_to_conversation(history: list[dict]) -> list[dict]:
+    """Convert detailed history to a simple role/content stream."""
+    return [
+        {"role": m["role"], "content": m["message"]}
+        for m in history
+    ]
+
+
+def _merge_response_data(
+    db: Session,
+    session_id: str,
+    base_data: Optional[dict],
+    include_history: bool,
+) -> Optional[dict]:
+    """Optionally append full conversation history to response payload."""
+    if not include_history:
+        return base_data
+
+    merged = dict(base_data) if isinstance(base_data, dict) else {}
+    history = _get_history_payload(db, session_id)
+    # conversation: simple GPT/Claude-like role/content stream.
+    merged["conversation"] = _history_to_conversation(history)
+    # history: detailed stream with stage/timestamp for debugging.
+    merged["history"] = history
+    merged["message_count"] = len(history)
+    merged["last_message"] = history[-1] if history else None
+    return merged
+
+
 def _extract_profile_from_request(req: StartSessionRequest) -> dict:
     return {
         "name": req.patient_name,
@@ -157,6 +205,7 @@ def start_session(
     req: StartSessionRequest,
     db: Session = Depends(get_db),
     user_id: str = Depends(_require_user_id),
+    include_history: bool = Query(default=True),
 ):
     """
     Stage 1 — User describes symptoms.
@@ -204,7 +253,8 @@ def start_session(
             session_id = session_id,
             status     = "questioning",
             message    = first_stage2_question,
-            stage      = "stage_2"
+            stage      = "stage_2",
+            data       = _merge_response_data(db, session_id, None, include_history)
         )
     else:
         # Fallback if generation fails
@@ -212,7 +262,8 @@ def start_session(
             session_id = session_id,
             status     = "error",
             message    = "Failed to generate profiling question",
-            stage      = "stage_2"
+            stage      = "stage_2",
+            data       = _merge_response_data(db, session_id, None, include_history)
         )
 
 # ─── STAGE 3 + 4 + 5: CONTINUE SESSION ───────────────────
@@ -221,6 +272,7 @@ def continue_session(
     req: ContinueSessionRequest,
     db: Session = Depends(get_db),
     user_id: str = Depends(_require_user_id),
+    include_history: bool = Query(default=True),
 ):
     """
     Handles all messages after the first one.
@@ -298,7 +350,8 @@ def continue_session(
                     session_id = req.session_id,
                     status     = "questioning",
                     message    = next_question,
-                    stage      = "stage_2"
+                    stage      = "stage_2",
+                    data       = _merge_response_data(db, req.session_id, None, include_history)
                 )
         
         # All Stage 2 questions answered → Move to Stage 3 + 4 + 5
@@ -341,7 +394,14 @@ def continue_session(
             raise HTTPException(status_code=500, detail="Error processing diagnosis")
 
         if result["status"] == "complete":
-            return _complete_session(db, session, result, req.session_id, user_profile=user_profile)
+            return _complete_session(
+                db,
+                session,
+                result,
+                req.session_id,
+                user_profile=user_profile,
+                include_history=include_history,
+            )
 
         # Save and return first follow-up question
         assistant_msg = result["question"]
@@ -356,7 +416,12 @@ def continue_session(
             status     = "questioning",
             message    = assistant_msg,
             stage      = "stage_5",
-            data       = {"top5": result["top5"]}
+            data       = _merge_response_data(
+                db,
+                req.session_id,
+                {"top5": result["top5"]},
+                include_history,
+            )
         )
 
     # ── STAGE 5: Subsequent follow-up answers ──
@@ -409,7 +474,14 @@ def continue_session(
             raise HTTPException(status_code=500, detail="Error processing diagnosis")
 
         if result["status"] == "complete":
-            return _complete_session(db, session, result, req.session_id, user_profile=user_profile)
+            return _complete_session(
+                db,
+                session,
+                result,
+                req.session_id,
+                user_profile=user_profile,
+                include_history=include_history,
+            )
 
         # Another follow-up question
         assistant_msg = result["question"]
@@ -422,7 +494,12 @@ def continue_session(
             status     = "questioning",
             message    = assistant_msg,
             stage      = "stage_5",
-            data       = {"top5": result["top5"]}
+            data       = _merge_response_data(
+                db,
+                req.session_id,
+                {"top5": result["top5"]},
+                include_history,
+            )
         )
 
 # ─── GET CHAT HISTORY ─────────────────────────────────────
@@ -439,12 +516,8 @@ def get_history(
     if session.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden: session does not belong to current user")
 
-    messages = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.session_id == session_id)
-        .order_by(ChatMessage.timestamp)
-        .all()
-    )
+    history = _get_history_payload(db, session_id)
+    conversation = _history_to_conversation(history)
 
     return {
         "session_id":       session_id,
@@ -452,15 +525,10 @@ def get_history(
         "started_at":       session.started_at,
         "ended_at":         session.ended_at,
         "final_diagnosis":  session.final_diagnosis,
-        "messages": [
-            {
-                "role":      m.role,
-                "message":   m.message,
-                "stage":     m.stage,
-                "timestamp": m.timestamp
-            }
-            for m in messages
-        ]
+        "message_count":    len(history),
+        "last_message":     history[-1] if history else None,
+        "conversation":     conversation,
+        "messages":         history,
     }
 
 @router.delete("/chat/delete/{session_id}")
@@ -702,6 +770,7 @@ def _complete_session(
     result: dict,
     session_id: str,
     user_profile: Optional[dict] = None,
+    include_history: bool = False,
 ) -> SessionResponse:
     """Mark session complete, save final diagnosis, return result."""
     final = result["result"]
@@ -730,7 +799,7 @@ def _complete_session(
         status     = "complete",
         message    = message,
         stage      = "result",
-        data       = final
+        data       = _merge_response_data(db, session_id, final, include_history)
     )
 
 
