@@ -139,5 +139,4 @@ dmypy.json
 
 # OS
 .DS_Store
-Thumbs.dbdata/embeddings/
-data/embeddings/
+Thumbs.db
