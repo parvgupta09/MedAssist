@@ -1,6 +1,5 @@
 # MedAssist 🤖 - AI-Powered Medical Symptom Checker
 
-[![Deploy on Hugging Face](https://img.shields.io/badge/Deploy-Hugging%20Face-orange)](https://huggingface.co/spaces)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 
@@ -41,7 +40,7 @@
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/medassist.git
+   git clone https://github.com/parvgupta09/MedAssist.git
    cd medassist
    ```
 
@@ -173,7 +172,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For questions or issues:
 - Open an issue on GitHub
-- Email: your.email@example.com
+- Email: parvguptajpr@gmail.com
 
 ---
 
